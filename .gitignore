@@ -1,0 +1,31 @@
+# 构建产物
+target/
+build/
+*.class
+*.jar
+*.war
+*.log
+logs/
+
+# 运行时数据（知识库原文、上传文件、导出）
+backend/data/
+data/
+*.tar
+*.tar.gz
+
+# 本地环境与凭据：绝不入库
+k3s-eqmaint.yaml
+*.kubeconfig
+.env
+.env.local
+application-local.yml
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 前端临时校验脚本产物
+node_modules/

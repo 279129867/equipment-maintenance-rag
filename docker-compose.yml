@@ -1,0 +1,72 @@
+# 一键起：MySQL 8 + 应用容器（个人练习项目，虚拟产线数据）
+# 用法：在项目根目录执行  docker compose up -d --build
+# 注意：容器应用占用 8080，若本机已有 java 进程在跑需先停掉
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: eqmaint-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root@2026
+      MYSQL_DATABASE: repair_order
+      MYSQL_USER: repair
+      MYSQL_PASSWORD: Repair@2026
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "3307:3306"          # 宿主机换成 3307，避免与本地已装的 MySQL 冲突
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./db-init:/docker-entrypoint-initdb.d:ro   # 首次启动自动建表 + 种子数据 + 向量表
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot@2026 --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: eqmaint/backend:1.0.0
+    container_name: eqmaint-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: repair_order
+      DB_USER: repair
+      DB_PASSWORD: Repair@2026
+      JAVA_OPTS: "-Xms256m -Xmx512m -XX:+UseG1GC"
+      TZ: Asia/Shanghai
+      # 模型接入：默认走本地替身（hash 512 维 + 抽取式），无需 key。
+      # 要接 bge-m3 + 对话模型，把下面两行改成 remote，并在宿主机设 SF_API_KEY 再 up -d。
+      RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-hashing}
+      RAG_ANSWER_PROVIDER: ${RAG_ANSWER_PROVIDER:-extractive}
+      SF_API_KEY: ${SF_API_KEY:-}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-BAAI/bge-m3}
+      RAG_ANSWER_MODEL: ${RAG_ANSWER_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      # 阈值要跟向量模型配套：用 hash 时 0.22；切到 bge-m3 时 0.5 左右
+      RAG_MIN_SCORE: ${RAG_MIN_SCORE:-0.22}
+    ports:
+      - "8080:8080"
+    volumes:
+      - upload-data:/app/data/uploads     # 知识库原文持久化，重建容器不丢
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  mysql-data:
+  upload-data:

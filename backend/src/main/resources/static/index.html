@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设备维保工单系统 · 维修知识助手</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<div class="layout" id="app" v-cloak>
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>设备维保工单系统</h1>
+      <p>虚拟产线演示环境<br>设备 → 点检 → 工单 → 停机统计 → 知识沉淀</p>
+    </div>
+    <nav class="nav">
+      <div class="group">业务主线</div>
+      <a :class="{active: view==='assets'}" href="#/assets">设备台账</a>
+      <a :class="{active: view==='inspection'}" href="#/inspection">点检管理</a>
+      <a :class="{active: view==='orders'}" href="#/orders">维修工单</a>
+      <a :class="{active: view==='stats'}" href="#/stats">停机统计</a>
+      <div class="group">智能助手</div>
+      <a :class="{active: view==='rag'}" href="#/rag">维修知识问答</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <!-- ========== 1. 设备台账 ========== -->
+    <section v-if="view==='assets'">
+      <div class="page-head">
+        <div>
+          <h2>设备台账</h2>
+          <div class="sub">设备主数据：编号 / 类型 / 车间 / 关键度 / 运行状态</div>
+        </div>
+        <button class="primary" @click="assetFormOpen = !assetFormOpen">{{ assetFormOpen ? '收起' : '新增设备' }}</button>
+      </div>
+
+      <div class="panel" v-if="assetFormOpen">
+        <h3>新增设备</h3>
+        <div class="form-row">
+          <div class="field"><label>设备编号 *</label><input type="text" v-model="assetForm.assetCode" placeholder="CNC-A-04"></div>
+          <div class="field"><label>设备名称 *</label><input type="text" v-model="assetForm.assetName" placeholder="立式加工中心"></div>
+          <div class="field"><label>设备类型 *</label><input type="text" v-model="assetForm.assetType" placeholder="CNC加工中心"></div>
+          <div class="field"><label>车间</label><input type="text" v-model="assetForm.workshop" placeholder="一号车间"></div>
+          <div class="field"><label>产线</label><input type="text" v-model="assetForm.lineName" placeholder="A线"></div>
+          <div class="field"><label>安装位置</label><input type="text" v-model="assetForm.location" placeholder="A区-3号位"></div>
+          <div class="field"><label>关键度</label>
+            <select v-model.number="assetForm.criticalLevel">
+              <option :value="1">A 关键</option><option :value="2">B 重要</option><option :value="3">C 一般</option>
+            </select>
+          </div>
+          <div class="field"><label>制造商</label><input type="text" v-model="assetForm.manufacturer"></div>
+          <div class="field"><label>型号</label><input type="text" v-model="assetForm.model"></div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;">
+          <button class="primary" @click="createAsset" :disabled="busy">保存</button>
+          <button class="ghost" @click="resetAssetForm">清空</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <input type="text" v-model="assetQuery.keyword" placeholder="编号 / 名称 / 型号" @keyup.enter="loadAssets(1)">
+          <input type="text" v-model="assetQuery.workshop" placeholder="车间">
+          <input type="text" v-model="assetQuery.assetType" placeholder="设备类型">
+          <button @click="loadAssets(1)">查询</button>
+          <button class="ghost" @click="resetAssetQuery">重置</button>
+          <span class="spacer"></span>
+          <span class="muted small">共 {{ assets.total }} 台</span>
+        </div>
+        <table v-if="assets.list.length">
+          <thead>
+          <tr><th>编号</th><th>名称</th><th>类型</th><th>车间 / 产线</th><th>关键度</th><th>运行状态</th><th>操作</th></tr>
+          </thead>
+          <tbody>
+          <tr v-for="a in assets.list" :key="a.id">
+            <td class="mono">{{ a.assetCode }}</td>
+            <td>{{ a.assetName }}</td>
+            <td>{{ a.assetType }}</td>
+            <td>{{ a.workshop || '-' }} <span class="muted small" v-if="a.lineName">/ {{ a.lineName }}</span></td>
+            <td><span class="badge" :class="a.criticalLevel===1?'red':(a.criticalLevel===2?'amber':'gray')">{{ criticalText(a.criticalLevel) }}</span></td>
+            <td><span class="badge" :class="runStatusClass(a.runStatus)">{{ runStatusText(a.runStatus) }}</span></td>
+            <td>
+              <button class="sm" @click="newOrderFor(a)">报修</button>
+              <button class="sm ghost" @click="startInspection(a)">点检</button>
+            </td>
+          </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-else>暂无设备，点右上角"新增设备"</div>
+        <div class="pager">
+          <button class="sm" :disabled="assets.page<=1" @click="loadAssets(assets.page-1)">上一页</button>
+          <span>第 {{ assets.page }} 页 / 共 {{ Math.max(1, Math.ceil(assets.total/assets.size)) }} 页</span>
+          <button class="sm" :disabled="assets.page*assets.size>=assets.total" @click="loadAssets(assets.page+1)">下一页</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 2. 点检管理 ========== -->
+    <section v-if="view==='inspection'">
+      <div class="page-head">
+        <div>
+          <h2>点检管理</h2>
+          <div class="sub">计划 → 执行 → 异常自动转工单（测量项不填结果时按上下限自动判定）</div>
+        </div>
+        <button class="primary" @click="planFormOpen = !planFormOpen">{{ planFormOpen ? '收起' : '新建点检计划' }}</button>
+      </div>
+
+      <div class="panel" v-if="planFormOpen">
+        <h3>新建点检计划</h3>
+        <div class="form-row">
+          <div class="field"><label>计划编号 *</label><input type="text" v-model="planForm.planCode" placeholder="IP-CNC-02"></div>
+          <div class="field"><label>计划名称 *</label><input type="text" v-model="planForm.planName" placeholder="加工中心班前点检"></div>
+          <div class="field"><label>设备 *</label>
+            <select v-model.number="planForm.assetId">
+              <option :value="null">请选择</option>
+              <option v-for="a in assets.list" :key="a.id" :value="a.id">{{ a.assetCode }} {{ a.assetName }}</option>
+            </select>
+          </div>
+          <div class="field"><label>周期</label>
+            <select v-model.number="planForm.cycleType"><option :value="1">每班</option><option :value="2">每日</option><option :value="3">每周</option></select>
+          </div>
+          <div class="field"><label>执行角色</label><input type="text" v-model="planForm.executorRole" placeholder="操作工"></div>
+        </div>
+
+        <h3 style="margin-top:16px;">点检项</h3>
+        <table>
+          <thead><tr><th>名称</th><th>方式</th><th>标准描述</th><th>下限</th><th>上限</th><th>单位</th><th></th></tr></thead>
+          <tbody>
+          <tr v-for="(it, idx) in planForm.items" :key="idx">
+            <td><input type="text" v-model="it.itemName" placeholder="主轴油温" style="width:120px"></td>
+            <td>
+              <select v-model.number="it.checkMethod" style="width:92px">
+                <option :value="1">测量</option><option :value="2">目视</option>
+              </select>
+            </td>
+            <td><input type="text" v-model="it.standardText" placeholder="≤45℃" style="width:150px"></td>
+            <td><input type="number" v-model="it.minValue" style="width:74px" placeholder="-"></td>
+            <td><input type="number" v-model="it.maxValue" style="width:74px" placeholder="45"></td>
+            <td><input type="text" v-model="it.unit" style="width:56px" placeholder="℃"></td>
+            <td><button class="sm danger" @click="removePlanItem(idx)">删除</button></td>
+          </tr>
+          </tbody>
+        </table>
+        <div style="margin-top:10px;display:flex;gap:8px;">
+          <button class="sm" @click="addPlanItem">+ 增加点检项</button>
+          <button class="primary" @click="createPlan" :disabled="busy">创建计划</button>
+        </div>
+      </div>
+
+      <div class="grid c2">
+        <div class="panel">
+          <div class="toolbar"><h3 style="margin:0">点检计划</h3><span class="spacer"></span><span class="muted small">共 {{ plans.length }} 个</span></div>
+          <div class="empty" v-if="!plans.length">暂无计划</div>
+          <div v-for="p in plans" :key="p.plan.id" class="panel" style="margin:0 0 10px;padding:12px;background:#fbfcfd;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+              <div>
+                <strong class="mono">{{ p.plan.planCode }}</strong>
+                <span style="margin-left:8px;">{{ p.plan.planName }}</span>
+                <div class="muted small">设备 ID {{ p.plan.assetId }} · {{ cycleText(p.plan.cycleType) }} · {{ p.items.length }} 个点检项</div>
+              </div>
+              <button class="sm primary" @click="openSubmit(p)">执行点检</button>
+            </div>
+            <div class="tag-list" style="margin-top:8px;">
+              <span class="badge gray" v-for="it in p.items" :key="it.id">
+                {{ it.itemName }}<template v-if="it.maxValue!=null||it.minValue!=null">（{{ it.minValue!=null?it.minValue:'-' }}~{{ it.maxValue!=null?it.maxValue:'-' }}{{ it.unit }}）</template>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>{{ submitPlan ? '执行点检：' + submitPlan.plan.planName : '执行点检' }}</h3>
+          <div class="hint" v-if="!submitPlan">左侧选择一个计划后，在这里录入实测值。任一测量项超出上下限会自动判异常并生成工单。</div>
+          <div v-else>
+            <div class="form-row" style="grid-template-columns:repeat(2,minmax(0,1fr));">
+              <div class="field"><label>点检人</label><input type="text" v-model="submitForm.inspector"></div>
+              <div class="field"><label>耗时（分钟）</label><input type="number" v-model.number="submitForm.costMinutes"></div>
+            </div>
+            <table style="margin-top:10px;">
+              <thead><tr><th>点检项</th><th>标准</th><th>实测值</th><th>判定</th></tr></thead>
+              <tbody>
+              <tr v-for="it in submitPlan.items" :key="it.id">
+                <td>{{ it.itemName }}</td>
+                <td class="muted small">{{ it.standardText || (it.minValue + '~' + it.maxValue + (it.unit||'')) }}</td>
+                <td><input type="number" style="width:92px" v-model="submitForm.items[it.id].measureValue" placeholder="填数值"></td>
+                <td>
+                  <select v-model="submitForm.items[it.id].result" style="width:92px">
+                    <option :value="null">自动判定</option>
+                    <option :value="1">正常</option>
+                    <option :value="2">异常</option>
+                  </select>
+                </td>
+              </tr>
+              </tbody>
+            </table>
+            <div class="field" style="margin-top:10px;">
+              <label>异常描述（可选）</label>
+              <textarea v-model="submitForm.abnormalDesc" placeholder="留空时系统按 实测值（标准…） 自动拼装"></textarea>
+            </div>
+            <div style="margin-top:10px;display:flex;gap:8px;">
+              <button class="primary" @click="submitRecord" :disabled="busy">提交点检</button>
+              <button class="ghost" @click="submitPlan=null">取消</button>
+            </div>
+            <div v-if="submitResult" class="panel" style="margin-top:12px;background:var(--accent-soft);border-color:#cdeae6;">
+              <strong>提交结果：</strong>
+              记录 #{{ submitResult.recordId }}，
+              {{ submitResult.result === 2 ? '判定异常' : '正常' }}，
+              异常项 {{ submitResult.abnormalCount }} 个
+              <template v-if="submitResult.orderId">
+                ，已自动生成工单
+                <a :href="'#/orders/' + submitResult.orderId" @click.prevent="goOrder(submitResult.orderId)" class="mono">{{ submitResult.orderNo }}</a>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar"><h3 style="margin:0">点检记录</h3><span class="spacer"></span><span class="muted small">共 {{ records.total }} 条</span></div>
+        <table v-if="records.list.length">
+          <thead><tr><th>ID</th><th>设备</th><th>点检人</th><th>日期</th><th>结果</th><th>异常描述</th><th>耗时</th></tr></thead>
+          <tbody>
+          <tr v-for="r in records.list" :key="r.id">
+            <td class="mono">{{ r.id }}</td>
+            <td>{{ assetLabel(r.assetId) }}</td>
+            <td>{{ r.inspector }}</td>
+            <td>{{ r.recordDate }}</td>
+            <td><span class="badge" :class="r.result===2?'red':'green'">{{ r.result===2?'异常':'正常' }}</span></td>
+            <td class="small">{{ r.abnormalDesc || '-' }}</td>
+            <td class="num">{{ r.costMinutes }} 分</td>
+          </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-else>暂无点检记录</div>
+      </div>
+    </section>
+
+    <!-- ========== 3. 工单列表 ========== -->
+    <section v-if="view==='orders'">
+      <div class="page-head">
+        <div>
+          <h2>维修工单</h2>
+          <div class="sub">状态机流转：待派单 → 待接单 → 维修中 → 待验收 → 已关闭，每次流转都有事件流水</div>
+        </div>
+        <button class="primary" @click="orderFormOpen = !orderFormOpen">{{ orderFormOpen ? '收起' : '手工报修' }}</button>
+      </div>
+
+      <div class="panel" v-if="orderFormOpen">
+        <h3>手工报修</h3>
+        <div class="form-row">
+          <div class="field"><label>设备 *</label>
+            <select v-model.number="orderForm.assetId">
+              <option :value="null">请选择</option>
+              <option v-for="a in assets.list" :key="a.id" :value="a.id">{{ a.assetCode }} {{ a.assetName }}</option>
+            </select>
+          </div>
+          <div class="field"><label>故障类别</label><input type="text" v-model="orderForm.faultType" placeholder="机械 / 电气 / 气动"></div>
+          <div class="field"><label>紧急度</label>
+            <select v-model.number="orderForm.urgency"><option :value="null">按设备关键度自动</option><option :value="1">紧急</option><option :value="2">一般</option></select>
+          </div>
+          <div class="field" style="grid-column:1 / span 2;"><label>故障描述 *</label><input type="text" v-model="orderForm.faultDesc" placeholder="主轴运转周期性异响，转速升高后加剧"></div>
+          <div class="field"><label>报修人</label><input type="text" v-model="orderForm.reporter" placeholder="李四"></div>
+        </div>
+        <div style="margin-top:12px;"><button class="primary" @click="createOrder" :disabled="busy">提交报修</button></div>
+      </div>
+
+      <div class="panel">
+        <div class="toolbar">
+          <select v-model="orderQuery.status" @change="loadOrders(1)">
+            <option value="">全部状态</option>
+            <option v-for="(label, code) in statusMap" :key="code" :value="String(code)">{{ label }}</option>
+          </select>
+          <button class="ghost" @click="orderQuery.status=''; loadOrders(1)">清除筛选</button>
+          <span class="spacer"></span>
+          <span class="muted small">共 {{ orders.total }} 单</span>
+        </div>
+        <table v-if="orders.list.length">
+          <thead><tr><th>工单号</th><th>设备</th><th>故障</th><th>紧急度</th><th>状态</th><th>报修时间</th><th>停机</th><th></th></tr></thead>
+          <tbody>
+          <tr v-for="o in orders.list" :key="o.id">
+            <td class="mono"><a :href="'#/orders/' + o.id" class="small">{{ o.orderNo }}</a></td>
+            <td>{{ assetLabel(o.assetId) }}</td>
+            <td>
+              <div class="small">{{ o.faultType || '-' }}</div>
+              <div class="muted small">{{ o.faultDesc }}</div>
+            </td>
+            <td><span class="badge" :class="o.urgency===1?'red':'gray'">{{ o.urgency===1?'紧急':'一般' }}</span></td>
+            <td><span class="badge" :class="statusClass(o.status)">{{ statusText(o.status) }}</span></td>
+            <td class="small">{{ fmtTime(o.reportTime) }}</td>
+            <td class="num">{{ o.downtimeMinutes }} 分</td>
+            <td><button class="sm" @click="goOrder(o.id)">详情</button></td>
+          </tr>
+          </tbody>
+        </table>
+        <div class="empty" v-else>当前筛选下没有工单</div>
+        <div class="pager">
+          <button class="sm" :disabled="orders.page<=1" @click="loadOrders(orders.page-1)">上一页</button>
+          <span>第 {{ orders.page }} 页 / 共 {{ Math.max(1, Math.ceil(orders.total/orders.size)) }} 页</span>
+          <button class="sm" :disabled="orders.page*orders.size>=orders.total" @click="loadOrders(orders.page+1)">下一页</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 4. 工单详情（含相似历史工单） ========== -->
+    <section v-if="view==='orderDetail'">
+      <div class="page-head">
+        <div>
+          <h2>工单详情</h2>
+          <div class="sub">状态流转 · 事件流水 · 相似历史工单推荐（RAG 向量召回）</div>
+        </div>
+        <button class="ghost" @click="goOrders">← 返回工单列表</button>
+      </div>
+
+      <div class="empty" v-if="!detail">加载中…</div>
+      <template v-else>
+        <div class="panel">
+          <div style="display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;align-items:flex-start;">
+            <div>
+              <div style="font-size:16px;font-weight:600;" class="mono">{{ detail.order.orderNo }}</div>
+              <div class="muted small" style="margin-top:6px;">
+                {{ assetLabel(detail.order.assetId) }} ·
+                {{ detail.order.faultType || '-' }} ·
+                报修人 {{ detail.order.reporter || '-' }}
+              </div>
+            </div>
+            <div class="tag-list">
+              <span class="badge" :class="statusClass(detail.order.status)">{{ statusText(detail.order.status) }}</span>
+              <span class="badge" :class="detail.order.urgency===1?'red':'gray'">{{ detail.order.urgency===1?'紧急':'一般' }}</span>
+              <span class="badge gray">来源 {{ sourceText(detail.order.sourceType) }}</span>
+            </div>
+          </div>
+
+          <div class="grid c4" style="margin-top:14px;">
+            <div><div class="muted small">报修时间</div><div>{{ fmtTime(detail.order.reportTime) }}</div></div>
+            <div><div class="muted small">接单</div><div>{{ detail.order.assignee || '-' }} {{ detail.order.acceptTime ? fmtTime(detail.order.acceptTime) : '' }}</div></div>
+            <div><div class="muted small">完工</div><div>{{ detail.order.finishTime ? fmtTime(detail.order.finishTime) : '-' }}</div></div>
+            <div><div class="muted small">停机时长</div><div class="num">{{ detail.order.downtimeMinutes }} 分钟</div></div>
+          </div>
+
+          <div class="panel" style="margin:14px 0 0;background:#fafbfc;">
+            <div class="muted small">故障描述</div>
+            <div style="margin-top:4px;line-height:1.7;">{{ detail.order.faultDesc }}</div>
+            <div class="muted small" style="margin-top:10px;">维修小结</div>
+            <div style="margin-top:4px;line-height:1.7;">{{ detail.order.repairSummary || '（未填写）' }}</div>
+          </div>
+
+          <div class="toolbar" style="margin-top:14px;" v-if="actionsOf(detail.order.status).length">
+            <input type="text" v-model="detailOperator" placeholder="操作人" style="width:120px">
+            <input type="text" v-model="detailRemark" placeholder="备注（可选）" style="width:200px">
+            <button v-for="act in actionsOf(detail.order.status)" :key="act[0]" class="primary" :disabled="busy" @click="doAction(act[0])">
+              {{ act[1] }}
+            </button>
+          </div>
+          <div class="hint" v-else>该工单已进入终态，不能再流转。</div>
+        </div>
+
+        <div class="panel">
+          <h3>相似历史工单（向维修知识库检索）</h3>
+          <div class="hint" v-if="!similar.length">暂无相似记录，可能历史工单还没索引（可到"维修知识问答"页执行一次全量重建）。</div>
+          <table v-else>
+            <thead><tr><th>历史工单</th><th>故障</th><th>当时处置</th><th>停机</th><th>相似度</th><th>反馈</th></tr></thead>
+            <tbody>
+            <tr v-for="s in similar" :key="s.orderId">
+              <td class="mono"><a :href="'#/orders/' + s.orderId" class="small">{{ s.orderNo }}</a></td>
+              <td>
+                <div class="small">{{ s.faultType || '-' }}</div>
+                <div class="muted small">{{ s.faultDesc }}</div>
+              </td>
+              <td class="small">{{ s.repairSummary || '（无小结）' }}</td>
+              <td class="num">{{ s.downtimeMinutes }} 分</td>
+              <td class="num">{{ s.score }}</td>
+              <td>
+                <button class="sm" @click="feedback(s.orderId, 1)">有用</button>
+                <button class="sm ghost" @click="feedback(s.orderId, 0)">无关</button>
+              </td>
+            </tr>
+            </tbody>
+          </table>
+          <div class="hint" style="margin-top:8px;">点"有用/无关"会写回 <span class="mono">ai_similar_ref.hit</span>，用于评估召回质量。</div>
+        </div>
+
+        <div class="panel">
+          <h3>流转记录</h3>
+          <div class="timeline">
+            <div class="item" v-for="e in detail.events" :key="e.id">
+              <div><strong>{{ actionText(e.action) }}</strong>
+                <span class="muted small"> {{ statusText(e.fromStatus) }} → {{ statusText(e.toStatus) }}</span>
+              </div>
+              <div class="t">{{ fmtTime(e.occurTime) }} · {{ e.operator || '-' }} {{ e.remark ? '· ' + e.remark : '' }}</div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- ========== 5. 停机统计 ========== -->
+    <section v-if="view==='stats'">
+      <div class="page-head">
+        <div>
+          <h2>停机统计</h2>
+          <div class="sub">时间口径：工单按报修时间、点检按点检日期；MTTR 只算已完工工单</div>
+        </div>
+        <div class="toolbar" style="margin:0;">
+          <input type="date" v-model="statsQuery.from">
+          <input type="date" v-model="statsQuery.to">
+          <button @click="loadStats">刷新</button>
+        </div>
+      </div>
+
+      <div class="grid c4" v-if="stats.overview">
+        <div class="kpi">
+          <div class="label">工单总量</div>
+          <div class="value">{{ stats.overview.orderCount }}<span class="unit">单</span></div>
+          <div class="small muted">已关闭 {{ stats.overview.closedCount }} · 在办 {{ stats.overview.openCount }}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">累计停机</div>
+          <div class="value">{{ stats.overview.downtimeMinutes }}<span class="unit">分钟</span></div>
+          <div class="small muted">≈ {{ (stats.overview.downtimeMinutes/60).toFixed(1) }} 小时</div>
+        </div>
+        <div class="kpi">
+          <div class="label">MTTR 平均修复</div>
+          <div class="value">{{ stats.overview.mttrMinutes }}<span class="unit">分钟</span></div>
+          <div class="small muted">仅统计已完工工单</div>
+        </div>
+        <div class="kpi">
+          <div class="label">平均响应</div>
+          <div class="value">{{ stats.overview.responseMinutes }}<span class="unit">分钟</span></div>
+          <div class="small muted">报修 → 接单</div>
+        </div>
+      </div>
+
+      <div class="grid c2">
+        <div class="panel">
+          <h3>按设备</h3>
+          <table>
+            <thead><tr><th>设备</th><th>工单</th><th>停机</th><th>MTTR</th><th>响应</th></tr></thead>
+            <tbody>
+            <tr v-for="a in stats.assets" :key="a.assetCode">
+              <td>{{ a.assetName }} <span class="muted small mono">{{ a.assetCode }}</span></td>
+              <td class="num">{{ a.orderCount }}</td>
+              <td class="num">{{ a.downtimeMinutes }}</td>
+              <td class="num">{{ a.mttrMinutes }}</td>
+              <td class="num">{{ a.responseMinutes }}</td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="panel">
+          <h3>按车间</h3>
+          <table>
+            <thead><tr><th>车间</th><th>工单</th><th>停机</th><th>MTTR</th></tr></thead>
+            <tbody>
+            <tr v-for="w in stats.workshops" :key="w.workshop">
+              <td>{{ w.workshop || '-' }}</td>
+              <td class="num">{{ w.orderCount }}</td>
+              <td class="num">{{ w.downtimeMinutes }}</td>
+              <td class="num">{{ w.mttrMinutes }}</td>
+            </tr>
+            </tbody>
+          </table>
+          <h3 style="margin-top:16px;">故障分类</h3>
+          <div v-for="f in stats.faultTypes" :key="f.faultType" class="bar-row">
+            <div class="name">{{ f.faultType || '未分类' }}</div>
+            <div class="bar"><span :style="{width: barWidth(f.orderCount, stats.faultTypes)}"></span></div>
+            <div class="val">{{ f.orderCount }} 单 / {{ f.downtimeMinutes }}分</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>按天趋势</h3>
+        <div v-for="t in stats.trend" :key="t.statDate" class="bar-row">
+          <div class="name">{{ t.statDate }}</div>
+          <div class="bar"><span :style="{width: barWidth(t.downtimeMinutes, stats.trend)}"></span></div>
+          <div class="val">{{ t.orderCount }}单 / {{ t.downtimeMinutes }}分</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 6. 维修知识问答 ========== -->
+    <section v-if="view==='rag'">
+      <div class="page-head">
+        <div>
+          <h2>维修知识问答</h2>
+          <div class="sub">手册/ SOP 上传 → 解析分块 → 双路召回（向量 + 关键词）→ 带出处回答</div>
+        </div>
+        <button class="ghost" @click="rebuildOrderIndex" :disabled="busy">重建历史工单索引</button>
+      </div>
+
+      <div class="panel">
+        <h3>上传维修资料</h3>
+        <div class="toolbar">
+          <input type="file" ref="fileInput" @change="onFileChange">
+          <input type="text" v-model="uploadAssetType" placeholder="适用设备类型（可选，如 CNC加工中心）" style="width:230px">
+          <button class="primary" @click="uploadDoc" :disabled="busy || !uploadFile">上传并入库</button>
+        </div>
+        <div class="hint">支持 PDF / DOCX / TXT。同一份文件重复上传会按 SHA-256 复用已有文档。</div>
+      </div>
+
+      <div class="grid c2">
+        <div class="panel">
+          <h3>知识库文档</h3>
+          <div class="empty" v-if="!rag.docs.length">还没有文档，先上传一份维修手册</div>
+          <table v-else>
+            <thead><tr><th>文档</th><th>类型</th><th>块数</th><th>状态</th><th></th></tr></thead>
+            <tbody>
+            <tr v-for="d in rag.docs" :key="d.id">
+              <td>
+                <div>{{ d.docName }}</div>
+                <div class="muted small">{{ d.parseMsg }}</div>
+              </td>
+              <td class="small">{{ d.assetType || '通用' }}</td>
+              <td class="num">{{ d.chunkCount }}</td>
+              <td><span class="badge" :class="d.parseStatus===2?'green':(d.parseStatus===3?'red':'amber')">{{ parseStatusText(d.parseStatus) }}</span></td>
+              <td><button class="sm danger" @click="deleteDoc(d.id)">删除</button></td>
+            </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <h3>提问</h3>
+          <textarea v-model="rag.question" placeholder="例如：主轴油温超过 45 度怎么处理？"></textarea>
+          <div class="toolbar" style="margin-top:10px;">
+            <button class="primary" @click="ask" :disabled="busy || !rag.question.trim()">提问</button>
+            <button class="sm ghost" @click="rag.question='主轴有异响，可能是什么原因'">示例1</button>
+            <button class="sm ghost" @click="rag.question='气压低于0.5MPa还能继续加工吗'">示例2</button>
+            <button class="sm ghost" @click="rag.question='维修前需要做哪些安全措施'">示例3</button>
+            <span class="spacer"></span>
+            <button class="sm ghost" @click="reindexAll" title="换向量模型后（512↔1024 维）必须重建一次">重建向量</button>
+          </div>
+
+          <div v-if="rag.answer" style="margin-top:12px;">
+            <div class="toolbar" style="margin-bottom:8px;">
+              <span class="badge teal">topScore {{ rag.answer.topScore }}</span>
+              <span class="badge gray">耗时 {{ rag.answer.latencyMs }}ms</span>
+              <span class="badge" :class="rag.answer.mode === 'llm' ? 'teal' : 'gray'">模式 {{ rag.answer.mode === 'llm' ? '大模型作答' : '抽取式作答' }}</span>
+            </div>
+            <div class="answer">{{ rag.answer.answer }}</div>
+            <div v-for="c in rag.answer.citations" :key="c.chunkId" class="citation">
+              <span class="src">《{{ c.docName }}》§{{ c.sectionPath || '正文' }} 第{{ c.pageNo || 1 }}页</span>
+              <span class="muted small"> · 相关度 {{ c.score }}</span>
+              <div class="muted small" style="margin-top:3px;">{{ c.snippet }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div class="toast" v-if="toast" :class="{err: toastError}">{{ toast }}</div>
+
+<script src="./vendor/vue.global.prod.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

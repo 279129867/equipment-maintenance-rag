@@ -1,0 +1,8 @@
+build*.log
+app*.log
+app*.err
+data/
+.idea/
+*.iml
+target/*
+!target/eqmaint-backend-1.0.0.jar

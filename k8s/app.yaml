@@ -1,0 +1,158 @@
+# K3s / K8s 部署清单（应用部分）
+# 用法：kubectl apply -f k8s/
+# 本地 k3d 实跑：先 k3d image import eqmaint/backend:1.0.0 -c eqmaint，再 apply
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eqmaint
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: eqmaint-db
+  namespace: eqmaint
+type: Opaque
+stringData:
+  DB_HOST: mysql
+  DB_PORT: "3306"
+  DB_NAME: repair_order
+  DB_USER: repair
+  DB_PASSWORD: Repair@2026
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eqmaint-uploads
+  namespace: eqmaint
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eqmaint-app
+  namespace: eqmaint
+  labels:
+    app: eqmaint-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eqmaint-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: eqmaint-app
+    spec:
+      containers:
+        - name: app
+          image: eqmaint/backend:1.0.0
+          # 本地 k3d 用 image import 把镜像塞进 containerd，所以不会真去远端拉
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: eqmaint-db
+          env:
+            - name: JAVA_OPTS
+              value: "-Xms256m -Xmx512m -XX:+UseG1GC"
+            - name: TZ
+              value: Asia/Shanghai
+            # 模型接入：这里已切到真实模型（bge-m3 + 对话大模型），key 走 eqmaint-ai Secret。
+            # 没有 Secret 时会以"无 key"状态启动：provider=remote 但调用失败 → 自动降级为抽取式作答。
+            # 想彻底回到本地替身，把下面两个值改回 hashing / extractive 即可，不需要动代码。
+            - name: RAG_EMBEDDING_PROVIDER
+              value: "remote"
+            - name: RAG_ANSWER_PROVIDER
+              value: "remote"
+            - name: RAG_MIN_SCORE
+              value: "0.55"
+            - name: SF_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: eqmaint-ai
+                  key: SF_API_KEY
+                  optional: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/data/uploads
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: eqmaint-uploads
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eqmaint-app
+  namespace: eqmaint
+spec:
+  type: ClusterIP
+  selector:
+    app: eqmaint-app
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+# 演示环境用 Ingress 暴露；没有 Ingress Controller 时改用 NodePort
+# 第二条不带 host 的规则是为了本机直接用 http://localhost:8081 访问，
+# 生产只保留带域名的规则即可（否则任意 Host 都能打进来）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: eqmaint-app
+  namespace: eqmaint
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: eqmaint.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eqmaint-app
+                port:
+                  number: 80
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: eqmaint-app
+                port:
+                  number: 80
+

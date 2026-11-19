@@ -1,0 +1,89 @@
+# MySQL：演示环境用单副本 Deployment + PVC；生产应换主从或托管数据库
+# 首次启动执行建表脚本：db-init/ 通过 ConfigMap 挂载到 /docker-entrypoint-initdb.d
+# 注意（实跑踩过）：所有资源必须显式写 namespace，否则会落到 default 命名空间，
+#   应用按 "mysql" 这个 Service 名去连库时会解析不到（跨命名空间解析不到短名）
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: eqmaint-mysql
+  namespace: eqmaint
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: eqmaint
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_0900_ai_ci
+            - --default-time-zone=+08:00
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "root@2026"
+            - name: MYSQL_DATABASE
+              value: repair_order
+            - name: MYSQL_USER
+              value: repair
+            - name: MYSQL_PASSWORD
+              value: "Repair@2026"
+            - name: TZ
+              value: Asia/Shanghai
+          ports:
+            - containerPort: 3306
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mysqladmin ping -h 127.0.0.1 -uroot -proot@2026 --silent"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+            - name: initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: eqmaint-mysql
+        - name: initdb
+          configMap:
+            name: eqmaint-db-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: eqmaint
+spec:
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306

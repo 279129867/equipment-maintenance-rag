@@ -1,0 +1,67 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: eqmaint-backend
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: 'jdbc:mysql://${DB_HOST:127.0.0.1}:${DB_PORT:3306}/${DB_NAME:repair_order}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true'
+    username: ${DB_USER:repair}
+    password: ${DB_PASSWORD:Repair@2026}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 10000
+  servlet:
+    multipart:
+      max-file-size: 30MB
+      max-request-size: 60MB
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+rag:
+  storage-dir: data/uploads
+  chunk-size: 500
+  chunk-overlap: 60
+  top-k: 4
+  # 相关度阈值：本地哈希向量的余弦普遍偏低（0.15~0.25），0.22 合适；
+  # 换成 bge-m3 后余弦整体抬高（相关片段 0.6~0.85），必须一起调高，否则什么都会被当成相关。
+  min-score: ${RAG_MIN_SCORE:0.22}
+  # 向量模型：hashing（本地 512 维，默认，零依赖）| remote（bge-m3 1024 维，需要 key）
+  embedding:
+    provider: ${RAG_EMBEDDING_PROVIDER:hashing}
+    base-url: ${RAG_EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}
+    api-key: ${SF_API_KEY:}
+    model: ${RAG_EMBEDDING_MODEL:BAAI/bge-m3}
+    dim: 1024
+    timeout-ms: 30000
+  # 作答方式：extractive（抽取式，默认）| remote（对话大模型，需要 key）
+  answer:
+    provider: ${RAG_ANSWER_PROVIDER:extractive}
+    base-url: ${RAG_ANSWER_BASE_URL:https://api.siliconflow.cn/v1}
+    api-key: ${SF_API_KEY:}
+    model: ${RAG_ANSWER_MODEL:Qwen/Qwen2.5-7B-Instruct}
+    temperature: 0.2
+    max-tokens: 400
+    timeout-ms: 60000
+
+springdoc:
+  swagger-ui:
+    path: /doc
+  api-docs:
+    path: /v3/api-docs
+
+logging:
+  level:
+    com.eqmaint: debug

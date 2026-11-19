@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eqmaint.stats.StatsMapper">
+
+    <!-- 总览：工单量、已关闭量、在办量、总停机分钟、MTTR、平均响应时长、点检异常数 -->
+    <select id="overview" resultType="com.eqmaint.stats.OverviewStat">
+        SELECT COUNT(*)                                                      AS orderCount,
+               COALESCE(SUM(CASE WHEN status = 50 THEN 1 ELSE 0 END), 0)      AS closedCount,
+               COALESCE(SUM(CASE WHEN status IN (10,20,30,35,40) THEN 1 ELSE 0 END), 0) AS openCount,
+               COALESCE(SUM(downtime_minutes), 0)                            AS downtimeMinutes,
+               COALESCE(ROUND(AVG(CASE WHEN finish_time IS NOT NULL THEN downtime_minutes END)), 0) AS mttrMinutes,
+               COALESCE(ROUND(AVG(CASE WHEN accept_time IS NOT NULL
+                                       THEN TIMESTAMPDIFF(MINUTE, report_time, accept_time) END)), 0) AS responseMinutes,
+               (SELECT COUNT(*) FROM eq_inspection_record r
+                 WHERE r.result = 2 AND r.record_date BETWEEN #{from} AND #{to}) AS abnormalRecordCount,
+               (SELECT COUNT(*) FROM eq_inspection_record r
+                 WHERE r.record_date BETWEEN #{from} AND #{to})                  AS inspectionCount
+        FROM wo_order
+        WHERE deleted = 0
+          AND report_time &gt;= #{from}
+          AND report_time &lt; DATE_ADD(#{to}, INTERVAL 1 DAY)
+    </select>
+
+    <!-- 按设备：停机排行、故障次数、MTTR、平均响应 -->
+    <select id="assetStats" resultType="com.eqmaint.stats.AssetStat">
+        SELECT a.id                                                          AS assetId,
+               a.asset_code                                                  AS assetCode,
+               a.asset_name                                                  AS assetName,
+               a.workshop                                                    AS workshop,
+               COUNT(o.id)                                                   AS orderCount,
+               COALESCE(SUM(CASE WHEN o.status = 50 THEN 1 ELSE 0 END), 0)    AS closedCount,
+               COALESCE(SUM(o.downtime_minutes), 0)                          AS downtimeMinutes,
+               COALESCE(ROUND(AVG(CASE WHEN o.finish_time IS NOT NULL THEN o.downtime_minutes END)), 0) AS mttrMinutes,
+               COALESCE(ROUND(AVG(CASE WHEN o.accept_time IS NOT NULL
+                                       THEN TIMESTAMPDIFF(MINUTE, o.report_time, o.accept_time) END)), 0) AS responseMinutes,
+               MAX(o.report_time)                                            AS lastReportTime
+        FROM eq_asset a
+        JOIN wo_order o
+          ON o.asset_id = a.id
+         AND o.deleted = 0
+         AND o.report_time &gt;= #{from}
+         AND o.report_time &lt; DATE_ADD(#{to}, INTERVAL 1 DAY)
+        WHERE a.deleted = 0
+        <if test="workshop != null and workshop != ''">
+            AND a.workshop = #{workshop}
+        </if>
+        GROUP BY a.id, a.asset_code, a.asset_name, a.workshop
+        ORDER BY downtimeMinutes DESC, orderCount DESC
+    </select>
+
+    <!-- 按车间 -->
+    <select id="workshopStats" resultType="com.eqmaint.stats.WorkshopStat">
+        SELECT COALESCE(NULLIF(a.workshop, ''), '未分配')                       AS workshop,
+               COUNT(o.id)                                                    AS orderCount,
+               COUNT(DISTINCT a.id)                                           AS assetCount,
+               COALESCE(SUM(o.downtime_minutes), 0)                           AS downtimeMinutes,
+               COALESCE(ROUND(AVG(CASE WHEN o.finish_time IS NOT NULL THEN o.downtime_minutes END)), 0) AS mttrMinutes,
+               COALESCE(ROUND(AVG(CASE WHEN o.accept_time IS NOT NULL
+                                       THEN TIMESTAMPDIFF(MINUTE, o.report_time, o.accept_time) END)), 0) AS responseMinutes
+        FROM wo_order o
+        JOIN eq_asset a ON a.id = o.asset_id AND a.deleted = 0
+        WHERE o.deleted = 0
+          AND o.report_time &gt;= #{from}
+          AND o.report_time &lt; DATE_ADD(#{to}, INTERVAL 1 DAY)
+        GROUP BY COALESCE(NULLIF(a.workshop, ''), '未分配')
+        ORDER BY downtimeMinutes DESC
+    </select>
+
+    <!-- 故障分类占比 -->
+    <select id="faultTypeStats" resultType="com.eqmaint.stats.FaultTypeStat">
+        SELECT COALESCE(NULLIF(fault_type, ''), '未分类') AS faultType,
+               COUNT(*)                                   AS orderCount,
+               COALESCE(SUM(downtime_minutes), 0)         AS downtimeMinutes
+        FROM wo_order
+        WHERE deleted = 0
+          AND report_time &gt;= #{from}
+          AND report_time &lt; DATE_ADD(#{to}, INTERVAL 1 DAY)
+        GROUP BY COALESCE(NULLIF(fault_type, ''), '未分类')
+        ORDER BY orderCount DESC
+    </select>
+
+    <!-- 按天趋势 -->
+    <select id="trend" resultType="com.eqmaint.stats.TrendPoint">
+        SELECT DATE(report_time)                          AS statDate,
+               COUNT(*)                                   AS orderCount,
+               COALESCE(SUM(downtime_minutes), 0)         AS downtimeMinutes
+        FROM wo_order
+        WHERE deleted = 0
+          AND report_time &gt;= #{from}
+          AND report_time &lt; DATE_ADD(#{to}, INTERVAL 1 DAY)
+        GROUP BY DATE(report_time)
+        ORDER BY statDate
+    </select>
+
+</mapper>
